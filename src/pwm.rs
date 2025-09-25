@@ -17,9 +17,8 @@ use std::fs::OpenOptions;
 use std::io::prelude::*;
 use std::str::FromStr;
 
-pub mod async_pwm;
-mod error;
-pub use error::Error;
+use crate::common;
+use common::{Error, Polarity, Result};
 
 #[derive(Debug)]
 pub struct PwmChip {
@@ -31,14 +30,6 @@ pub struct Pwm {
     chip: PwmChip,
     number: u32,
 }
-
-#[derive(Debug)]
-pub enum Polarity {
-    Normal,
-    Inverse,
-}
-
-pub type Result<T> = ::std::result::Result<T, error::Error>;
 
 /// Open the specified entry name as a writable file
 fn pwm_file_wo(chip: &PwmChip, pin: u32, name: &str) -> Result<File> {
@@ -139,7 +130,7 @@ impl PwmChip {
 }
 
 impl Pwm {
-    /// Create a new Pwm wiht the provided chip/number
+    /// Create a new Pwm with the provided chip/number
     ///
     /// This function does not export the Pwm pin
     pub fn new(chip: u32, number: u32) -> Result<Pwm> {
@@ -158,7 +149,7 @@ impl Pwm {
             Ok(()) => self.unexport(),
             Err(e) => match self.unexport() {
                 Ok(()) => Err(e),
-                Err(ue) => Err(error::Error::Unexpected(format!(
+                Err(ue) => Err(Error::Unexpected(format!(
                     "Failed unexporting due to:\n{}\nwhile handling:\n{}",
                     ue, e
                 ))),
@@ -206,7 +197,7 @@ impl Pwm {
         if t.len() == 2 {
             Ok((t[0], t[1]))
         } else {
-            Err(error::Error::Unexpected(format!("Failed exporting")))
+            Err(Error::Unexpected(format!("Failed exporting")))
         }
     }
 

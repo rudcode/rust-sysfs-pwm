@@ -22,7 +22,7 @@ pub enum Error {
 }
 
 impl ::std::error::Error for Error {
-    fn cause(&self) -> Option<&dyn (::std::error::Error)> {
+    fn cause(&self) -> Option<&dyn ::std::error::Error> {
         match *self {
             Error::Io(ref e) => Some(e),
             _ => None,
@@ -44,3 +44,11 @@ impl convert::From<io::Error> for Error {
         Error::Io(e)
     }
 }
+
+#[derive(Debug)]
+pub enum Polarity {
+    Normal,
+    Inverse,
+}
+
+pub type Result<T> = ::std::result::Result<T, Error>;

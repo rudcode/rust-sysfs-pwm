@@ -10,7 +10,8 @@
 // https://github.com/npryce/rusty-pi/blob/master/src/pi/gpio.rs
 
 extern crate sysfs_pwm;
-use sysfs_pwm::{Pwm, Result};
+use sysfs_pwm::common::Result;
+use sysfs_pwm::pwm::Pwm;
 
 // PIN: EHRPWM0A (P9_22)
 const BB_PWM_CHIP: u32 = 0;
