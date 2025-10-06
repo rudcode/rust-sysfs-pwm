@@ -13,8 +13,7 @@
 
 use std::fs;
 use std::fs::File;
-use std::fs::OpenOptions;
-use std::io::prelude::*;
+use std::io::Write;
 use std::str::FromStr;
 
 use crate::common;
@@ -31,29 +30,21 @@ pub struct Pwm {
     number: u32,
 }
 
-/// Open the specified entry name as a writable file
-fn pwm_file_wo(chip: &PwmChip, pin: u32, name: &str) -> Result<File> {
-    let f = OpenOptions::new().write(true).open(format!(
-        "/sys/class/pwm/pwmchip{}/pwm{}/{}",
-        chip.number, pin, name
-    ))?;
-    Ok(f)
+#[inline]
+fn pwm_file_write(chip: u32, pin: u32, name: &str, value: &[u8]) -> Result<()> {
+    Ok(File::create(format!("/sys/class/pwm/pwmchip{chip}/pwm{pin}/{name}"))?.write_all(value)?)
 }
 
-/// Open the specified entry name as a readable file
-fn pwm_file_ro(chip: &PwmChip, pin: u32, name: &str) -> Result<File> {
-    let f = File::open(format!(
-        "/sys/class/pwm/pwmchip{}/pwm{}/{}",
-        chip.number, pin, name
-    ))?;
-    Ok(f)
+#[inline]
+fn pwm_file_read(chip: u32, pin: u32, name: &str) -> Result<String> {
+    Ok(fs::read_to_string(format!(
+        "/sys/class/pwm/pwmchip{chip}/pwm{pin}/{name}"
+    ))?)
 }
 
-/// Get the u32 value from the given entry
-fn pwm_file_parse<T: FromStr>(chip: &PwmChip, pin: u32, name: &str) -> Result<T> {
-    let mut s = String::with_capacity(10);
-    let mut f = pwm_file_ro(chip, pin, name)?;
-    f.read_to_string(&mut s)?;
+#[inline]
+fn pwm_file_parse<T: FromStr>(chip: u32, pin: u32, name: &str) -> Result<T> {
+    let s = pwm_file_read(chip, pin, name)?;
     match s.trim().parse::<T>() {
         Ok(r) => Ok(r),
         Err(_) => Err(Error::Unexpected(format!(
@@ -63,15 +54,12 @@ fn pwm_file_parse<T: FromStr>(chip: &PwmChip, pin: u32, name: &str) -> Result<T>
     }
 }
 
-/// Get the two u32 from capture file descriptor
-fn pwm_capture_parse<T: FromStr>(chip: &PwmChip, pin: u32, name: &str) -> Result<Vec<T>> {
-    let mut s = String::with_capacity(10);
-    let mut f = pwm_file_ro(chip, pin, name)?;
-    f.read_to_string(&mut s)?;
-    s = s.trim().to_string();
-    let capture = s.split_whitespace().collect::<Vec<_>>();
+#[inline]
+fn pwm_file_parse_vec<T: FromStr>(chip: u32, pin: u32, name: &str) -> Result<Vec<T>> {
+    let s = pwm_file_read(chip, pin, name)?.trim().to_string();
+    let vec_s = s.split_whitespace().collect::<Vec<_>>();
     let mut vec: Vec<T> = vec![];
-    for s in capture.iter() {
+    for s in vec_s.iter() {
         if let Ok(j) = s.parse::<T>() {
             vec.push(j);
         }
@@ -86,11 +74,8 @@ impl PwmChip {
     }
 
     pub fn count(&self) -> Result<u32> {
-        let npwm_path = format!("/sys/class/pwm/pwmchip{}/npwm", self.number);
-        let mut npwm_file = File::open(&npwm_path)?;
-        let mut s = String::new();
-        npwm_file.read_to_string(&mut s)?;
-        match s.parse::<u32>() {
+        let s = fs::read_to_string(format!("/sys/class/pwm/pwmchip{}/npwm", self.number))?;
+        match s.trim().parse::<u32>() {
             Ok(n) => Ok(n),
             Err(_) => Err(Error::Unexpected(format!(
                 "Unexpected npwm contents: {:?}",
@@ -107,9 +92,8 @@ impl PwmChip {
         ))
         .is_err()
         {
-            let path = format!("/sys/class/pwm/pwmchip{}/export", self.number);
-            let mut export_file = File::create(&path)?;
-            let _ = export_file.write_all(format!("{}", number).as_bytes());
+            File::create(format!("/sys/class/pwm/pwmchip{}/export", self.number))?
+                .write_all(number.to_string().as_bytes())?;
         }
         Ok(())
     }
@@ -121,9 +105,8 @@ impl PwmChip {
         ))
         .is_ok()
         {
-            let path = format!("/sys/class/pwm/pwmchip{}/unexport", self.number);
-            let mut export_file = File::create(&path)?;
-            let _ = export_file.write_all(format!("{}", number).as_bytes());
+            File::create(format!("/sys/class/pwm/pwmchip{}/unexport", self.number))?
+                .write_all(number.to_string().as_bytes())?;
         }
         Ok(())
     }
@@ -169,31 +152,33 @@ impl Pwm {
 
     /// Enable/Disable the PWM Signal
     pub fn enable(&self, enable: bool) -> Result<()> {
-        let mut enable_file = pwm_file_wo(&self.chip, self.number, "enable")?;
-        let contents = if enable { "1" } else { "0" };
-        enable_file.write_all(contents.as_bytes())?;
-        Ok(())
+        pwm_file_write(
+            self.chip.number,
+            self.number,
+            "enable",
+            &(enable as u8).to_string().as_bytes(),
+        )
     }
 
     /// Query the state of enable for a given PWM pin
     pub fn get_enabled(&self) -> Result<bool> {
-        pwm_file_parse::<u32>(&self.chip, self.number, "enable").map(|enable_state| {
-            match enable_state {
-                1 => true,
-                0 => false,
+        Ok(
+            match pwm_file_read(self.chip.number, self.number, "enable")?.trim() {
+                "1" => true,
+                "0" => false,
                 _ => panic!("enable != 1|0 should be unreachable"),
-            }
-        })
+            },
+        )
     }
 
     /// Get the currently configured duty_cycle in nanoseconds
     pub fn get_duty_cycle_ns(&self) -> Result<u32> {
-        pwm_file_parse::<u32>(&self.chip, self.number, "duty_cycle")
+        pwm_file_parse::<u32>(self.chip.number, self.number, "duty_cycle")
     }
 
     /// Get the capture
     pub fn get_capture(&self) -> Result<(u32, u32)> {
-        let t = pwm_capture_parse::<u32>(&self.chip, self.number, "capture")?;
+        let t = pwm_file_parse_vec::<u32>(self.chip.number, self.number, "capture")?;
         if t.len() == 2 {
             Ok((t[0], t[1]))
         } else {
@@ -205,10 +190,12 @@ impl Pwm {
     ///
     /// Value is in nanoseconds and must be less than the period.
     pub fn set_duty_cycle_ns(&self, duty_cycle_ns: u32) -> Result<()> {
-        // we'll just let the kernel do the validation
-        let mut duty_cycle_file = pwm_file_wo(&self.chip, self.number, "duty_cycle")?;
-        duty_cycle_file.write_all(format!("{}", duty_cycle_ns).as_bytes())?;
-        Ok(())
+        pwm_file_write(
+            self.chip.number,
+            self.number,
+            "duty_cycle",
+            &duty_cycle_ns.to_string().as_bytes(),
+        )
     }
 
     /// Get the currently configured duty_cycle as percentage of period
@@ -220,37 +207,40 @@ impl Pwm {
     ///
     /// Value is as percentage of period.
     pub fn set_duty_cycle(&self, duty_cycle: f32) -> Result<()> {
-        self.set_duty_cycle_ns((self.get_period_ns()? as f32 * duty_cycle).round() as u32)?;
-        Ok(())
+        self.set_duty_cycle_ns((self.get_period_ns()? as f32 * duty_cycle).round() as u32)
     }
 
     /// Get the currently configured period in nanoseconds
     pub fn get_period_ns(&self) -> Result<u32> {
-        pwm_file_parse::<u32>(&self.chip, self.number, "period")
+        pwm_file_parse::<u32>(self.chip.number, self.number, "period")
     }
 
     /// The period of the PWM signal in Nanoseconds
     pub fn set_period_ns(&self, period_ns: u32) -> Result<()> {
-        let mut period_file = pwm_file_wo(&self.chip, self.number, "period")?;
-        period_file.write_all(format!("{}", period_ns).as_bytes())?;
-        Ok(())
+        pwm_file_write(
+            self.chip.number,
+            self.number,
+            "period",
+            &period_ns.to_string().as_bytes(),
+        )
     }
 
     /// Set the polarity of the PWM signal
     pub fn set_polarity(&self, polarity: Polarity) -> Result<()> {
-        let mut polarity_file = pwm_file_wo(&self.chip, self.number, "polarity")?;
-        match polarity {
-            Polarity::Normal => polarity_file.write_all("normal".as_bytes())?,
-            Polarity::Inverse => polarity_file.write_all("inversed".as_bytes())?,
-        };
-        Ok(())
+        pwm_file_write(
+            self.chip.number,
+            self.number,
+            "polarity",
+            match polarity {
+                Polarity::Normal => b"normal",
+                Polarity::Inverse => b"inversed",
+            },
+        )
     }
 
     /// Get the polarity of the PWM signal
     pub fn get_polarity(&self) -> Result<Polarity> {
-        let mut polarity_file = pwm_file_ro(&self.chip, self.number, "polarity")?;
-        let mut s = String::new();
-        polarity_file.read_to_string(&mut s)?;
+        let s = pwm_file_read(self.chip.number, self.number, "polarity")?;
         match s.trim() {
             "normal" => Ok(Polarity::Normal),
             "inversed" => Ok(Polarity::Inverse),
